@@ -1,3 +1,6 @@
+![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 # Earth Invaders 
 Earth Invaders is a high-fidelity, retro-style arcade shooter built with Python and Pygame. It features modern sub-pixel physics, a dynamic difficulty system, and an authentic CRT monitor simulation including scanlines, vignettes, and chromatic aberration.
  ## Controls
