@@ -1,211 +1,87 @@
 import pygame
 import random
-import math
-import os
-import sys
 from pygame import mixer
-
-#-------- Configuration
-SCREEN_WIDTH = 1280
-SCREEN_HEIGHT = 720
-PLAYER_START = (SCREEN_WIDTH / 2, SCREEN_HEIGHT * .85)
-ENEMY_SPAWN_Y_RANGE = (20, 250)
-COLLISION_DISTANCE = int(SCREEN_HEIGHT * .75)
-FPS = 60
-#-------- Asset Handling
-BASE_PATH = os.path.abspath(os.path.dirname(__file__))
-
-
-
-def get_path(filename):
-    return os.path.join(BASE_PATH, filename)
-
-class Entity(pygame.sprite.Sprite):
-    def __init__(self, surface, x, y, scaling_factor=1.0):
-        super().__init__()
-        self.image = surface
-
-        if scaling_factor != 1.0:
-            self.image = pygame.transform.scale_by(self.image, scaling_factor)
-
-        self.mask = pygame.mask.from_surface(self.image)
-        self.rect = self.image.get_rect()
-
-        self.pos_x = float(x)
-        self.pos_y = float(y)
-
-        self.rect.topleft = (int(self.pos_x), int(self.pos_y))
-
-        self.rect.x = int(self.pos_x)
-        self.rect.y = int(self.pos_y)
-
-class Bullet(Entity):
-    def __init__(self, surface, x, y):
-        super().__init__(surface, x, y, scaling_factor=.5)
-
-        self.rect.centerx = x
-        self.rect.bottom = y + 25
-
-        self.pos_x = float(self.rect.x)
-        self.pos_y = float(self.rect.y)
-
-        self.speed = 700.0
-
-    def update(self, dt):
-        self.rect.y -= self.speed * dt
-        if self.rect.y < -32:
-            self.kill()
-
-class Player(Entity):
-    def __init__(self, surface):
-        super().__init__(surface, PLAYER_START[0], PLAYER_START[1], 2)
-
-        self.pos_x = float(PLAYER_START[0])
-        self.pos_y = float(PLAYER_START[1])
-
-        # 3. Sync the rect one last time
-        self.rect.x = int(self.pos_x)
-        self.rect.y = int(self.pos_y)
-
-        self.speed = 500.0
-        self.velocity = 0.0
-
-    def move(self, direction):
-        self.velocity = direction * self.speed
-
-    def update(self, dt):
-        # Position = Speed * Time
-        self.pos_x += self.velocity * dt
-        self.rect.x = int(self.pos_x)  # Sync rect to the float position
-
-        # Keep player on screen
-        if self.rect.x < 0:
-            self.rect.x = 0
-            self.pos_x = 0.0
-        elif self.rect.x > SCREEN_WIDTH - self.rect.width:
-            self.rect.x = SCREEN_WIDTH - self.rect.width
-            self.pos_x = float(self.rect.x)
-
-class Enemy(Entity):
-    def __init__(self, surface, x, y):
-        super().__init__(surface,
-                         x,
-                         y,
-                         2)
-
-        self.image = pygame.transform.flip(self.image, False, True)
-
-        self.pos_x = float(x)
-        self.pos_y = float(y)
-
-        self.base_vx = 300.0
-        self.vx = float(self.base_vx)
-        self.vy  = 32.0
-
-    def update(self, speed_multiplier, dt):
-        current_speed = self.base_vx * float(speed_multiplier)
-
-        direction = 1.0 if self.vx > 0 else -1.0
-        self.vx = current_speed * direction
-
-        self.pos_x += self.vx * dt
-
-        if self.pos_x <= 0:
-            self.pos_x = 0.0
-            self.vx = abs(self.vx)
-            self.pos_y += self.vy
-        elif self.pos_x >= float(SCREEN_WIDTH - self.rect.width):
-            self.pos_x = float(SCREEN_WIDTH - self.rect.width)
-            self.vx = -abs(self.vx)
-            self.pos_y += self.vy
-
-        self.rect.x = round(self.pos_x)
-        self.rect.y = round(self.pos_y)
-
-    def reset(self, x, y):
-        # 2. Update the Floats
-        self.pos_x = float(x)
-        self.pos_y = float(y)
-
-        # 3. Update the Rect
-        self.rect.x = int(self.pos_x)
-        self.rect.y = int(self.pos_y)
+from settings import *
+from entities import Player, Bullet, Enemy
 
 class GameManager:
     def __init__(self):
+        # Pygame Initialization
         pygame.mixer.pre_init(44100, -16, 2, 512)
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        pygame.display.set_caption(TITLE)
+        self.clock = pygame.time.Clock()
+        self.running = True
+
+        # ---- Assets ----
         self.main_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        pygame.display.set_caption("Earth Invaders")
+        self.assets = {
+            "player": pygame.image.load(get_path("assets/spaceship_2.png",)).convert_alpha(),
+            "enemy": pygame.image.load(get_path("assets/invadership.png",)).convert_alpha(),
+            "bullet": pygame.image.load(get_path("assets/spaceMissile.png",)).convert_alpha(),
+            "bg": pygame.image.load(get_path("assets/earth_background.png")).convert()
+        }
 
+        # ---- Audio ----
+        self.bullet_sound = mixer.Sound(get_path("assets/audio/firing_sound.wav"))
+        self.explosion_sound = mixer.Sound(get_path("assets/audio/explosion_sound.wav"))
 
-        self.background = pygame.image.load(get_path("assets/earth_background.png")).convert()
-        self.bullet_sound = mixer.Sound(get_path("assets/audio/firing_sound"))
-        self.explosion_sound = mixer.Sound(get_path("assets/audio/explosion_sound"))
-
-        self.font = pygame.font.SysFont("pressstart2p", 32)
-        self.over_font = pygame.font.SysFont("pressstart2p", 45)
-
+        # ---- Music ----
         mixer.music.load(get_path("assets/audio/background_music.wav"))
         mixer.music.play(-1)
 
-        self.assets = {}
-        self.preload_assets()
+        # ---- Font ----
+        self.font = pygame.font.Font("assets/font/PressStart2P-Regular.ttf", 32)
+        self.over_font = pygame.font.Font("assets/font/PressStart2P-Regular.ttf", 45)
 
+        # ---- Load Score ----
+        self.high_score_file = get_path("highscore.txt")
+
+        # ---- Post Processing Effects ----
         self.crt_texture = self.create_crt_lines()
         self.vignette = self.create_vignette()
 
-        self.clock = pygame.time.Clock()
-        self.score = 0
+        self.high_score = self.load_high_score()
+
+        self.levels_per_difficulty = 50
+        self.difficulty_step = 0.2
+
+        self.hud_bullet = pygame.transform.scale_by(self.assets["bullet"], 0.75)
+        self.hud_bullet_gray = self.hud_bullet.copy()
+        self.hud_bullet_gray.fill((100, 100, 100), special_flags=pygame.BLEND_RGB_MULT)
+
+        self.reset_game()
+
+    def reset_game(self):
         self.game_over = False
+        self.score = 0
+        self.level = 1
+        self.speed_multiplier = 1.0
 
+        self.max_bullet_stock = 3
+        self.current_bullet_stock = 3
+        self.bullet_recharge_time = 1.0  # Seconds per bullet
+        self.recharge_timer = 0.0
+
+        self.freeze_timer = 0.0
+        self.shake_intensity = 0
+        self.shake_decay = 0.9  # How fast the shake stops (0 to 1)
+
+        # ---- Create Entities ----
+        self.bullets = pygame.sprite.Group()
         self.player = Player(self.assets["player"])
-
         self.enemies = pygame.sprite.Group()
 
-        for _ in range(6):
-            # Pass the group so the new enemy can check for neighbors
-            safe_x, safe_y = self.create_safe_spawn(self.enemies, 64, 64)
-
-            new_enemy = Enemy(self.assets["enemy"], safe_x, safe_y)
-            self.enemies.add(new_enemy)
-
-        self.bullets = pygame.sprite.Group()
-
-        self.high_score_file = get_path("highscore.txt")
-        self.high_score = self.load_high_score()
-        self.level = 1
-        self.difficulty_multiplier = 1.0
-
-    def preload_assets(self):
-        """Load images once and store them in a dictionary."""
-        asset_files = {
-            "player": "assets/spaceship_2.png",
-            "enemy": "assets/invadership.png",
-            "bullet": "assets/spaceMissile.png"
-        }
-
-        for name, path in asset_files.items():
-            # Load, convert, and store
-            surface = pygame.image.load(get_path(path)).convert_alpha()
-
-            # If you want to keep your bounding_rect logic from the original Entity class:
-            actual_area = surface.get_bounding_rect()
-            self.assets[name] = surface.subsurface(actual_area)
-
-    def update_difficulty(self):
-        new_level = (self.score // 10) + 1
-        if new_level > self.level:
-            self.level = new_level
-
-            self.difficulty_multiplier = 1.0 + (self.level - 1) * 0.2
-            print(f"Level Up! Current Level: {self.level}")
+        self.spawn_enemies()
+        self.load_high_score()
 
     def load_high_score(self):
         try:
-            with open(self.high_score_file, "r") as f:
-                return int(f.read())
+            with open(self.high_score_file, "a+") as f:
+                f.seek(0)
+                content = f.read().strip()
+                return int(content)
         except (FileNotFoundError, ValueError):
             return 0
 
@@ -215,68 +91,96 @@ class GameManager:
             with open(self.high_score_file, "w") as f:
                 f.write(str(self.high_score))
 
+    def spawn_enemies(self):
+        self.enemies.empty()
+        self.update_difficulty()
+        for _ in range(5 + self.level):
+            x = random.randint(50, SCREEN_WIDTH - 100)
+            y = random.randint(ENEMY_SPAWN_Y_MIN, ENEMY_SPAWN_Y_MAX)
+            self.enemies.add(Enemy(self.assets["enemy"], x, y))
+
+    def trigger_shake(self, intensity, duration= .5):
+        self.shake_intensity = intensity
+        self.freeze_timer = duration
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
 
             if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE and not self.game_over and self.current_bullet_stock > 0:
+                    self.bullets.add(Bullet(self.assets["bullet"], self.player.rect.centerx, self.player.rect.top))
+                    self.bullet_sound.play()
+                    self.current_bullet_stock -= 1
+
                 if self.game_over and event.key == pygame.K_r:
                     self.reset_game()
 
-            if not self.game_over:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_LEFT: self.player.move(-1)
-                    if event.key == pygame.K_RIGHT: self.player.move(1)
-                    if event.key == pygame.K_SPACE:
-                        if len(self.bullets) < 3:
-                            self.bullets.add(Bullet(self.assets["bullet"], self.player.rect.centerx, self.player.rect.top))
-                            self.bullet_sound.play()
-
-                if event.type == pygame.KEYUP:
-                    if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
-                        self.player.move(0)
         return True
 
     def check_collisions(self):
+        hits = pygame.sprite.groupcollide(self.enemies, self.bullets, True, True, pygame.sprite.collide_mask)
+        for hit in hits:
+            self.score += 10
+            self.explosion_sound.play()
+            if not self.enemies:
+                self.level += 1
+                self.speed_multiplier += 0.2
+                self.spawn_enemies()
+
         for enemy in self.enemies:
-            collided_bullets = pygame.sprite.spritecollide(enemy, self.bullets, True, pygame.sprite.collide_mask)
-            if collided_bullets:
-                self.explosion_sound.play()
-                self.score += 1
-
-                # Find a NEW safe spot for the respawn
-                nx, ny = self.create_safe_spawn(self.enemies, enemy.rect.width, enemy.rect.height)
-
-                # Reset the enemy with these new coordinates
-                enemy.reset(nx, ny)
-
             if enemy.rect.y > COLLISION_DISTANCE:
-                self.game_over = True
-                self.save_high_score()
+                if not self.game_over and self.freeze_timer <= 0:
+                    self.trigger_shake(30, 1.0)
+                    self.save_high_score()
                 break
 
-    def reset_game(self):
-        self.score = 0
-        self.level = 1
-        self.difficulty_multiplier = 1.0
-        self.game_over = False
+    def draw_bullet_hud(self):
+        start_x = 10
+        start_y = SCREEN_HEIGHT * .92
+        spacing = 30
 
-        self.enemies.empty()
-        self.bullets.empty()
+        for i in range(self.max_bullet_stock):
+            x = start_x + (i * spacing)
 
-        self.player = Player(self.assets["player"])
-        self.enemies = pygame.sprite.Group()
+            if i < self.current_bullet_stock:
+                # 1. We have this bullet - Draw normally
+                self.screen.blit(self.hud_bullet, (x, start_y))
 
-        for _ in range(6):
-            # Pass the group so the new enemy can check for neighbors
-            safe_x, safe_y = self.create_safe_spawn(self.enemies, 64, 64)
+            elif i == self.current_bullet_stock:
+                # 2. This is the bullet currently RECHARGING
+                # Draw the gray base first
+                self.screen.blit(self.hud_bullet_gray, (x, start_y))
 
-            new_enemy = Enemy(self.assets["enemy"], safe_x, safe_y)
-            self.enemies.add(new_enemy)
+                # Calculate how much of the "color" bullet to show from the bottom
+                # progress is 0.0 to 1.0
+                progress = self.recharge_timer / self.bullet_recharge_time
 
+                height = self.hud_bullet.get_height()
+                visible_height = int(height * progress)
 
-    def create_crt_lines(self):
+                # Create a clipping rect for the "filled" part
+                # Area: (left, top, width, height)
+                # We want to show the bottom part of the sprite
+                clip_rect = pygame.Rect(0, height - visible_height, self.hud_bullet.get_width(), visible_height)
+
+                # Blit the colored bullet using the area parameter to only show the bottom
+                self.screen.blit(self.hud_bullet, (x, start_y + (height - visible_height)), clip_rect)
+
+            else:
+                # 3. This bullet is empty and waiting its turn - Draw fully gray
+                self.screen.blit(self.hud_bullet_gray, (x, start_y))
+
+    def update_difficulty(self):
+        """Speeds up the game after killing a certain amount of enemies"""
+        self.speed_multiplier = 1.0 + (self.level - 1) * self.difficulty_step
+        if self.level % 5 == 0:
+            self.max_bullet_stock += 1
+        print(f"Current Level: {self.level}")
+
+    @staticmethod
+    def create_crt_lines():
         crt_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
         line_color = (10, 10, 10, 80)
 
@@ -285,7 +189,8 @@ class GameManager:
 
         return crt_surface
 
-    def create_vignette(self):
+    @staticmethod
+    def create_vignette():
         vignette_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
 
         for i in range(0,100,10):
@@ -295,34 +200,17 @@ class GameManager:
 
         return vignette_surface
 
-    def create_safe_spawn(self, existing_enemies, width, height):
-        max_attempts = 50
-        for _ in range(max_attempts):
-            rx = random.randint(0, SCREEN_WIDTH - width)
-            ry = random.randint(*ENEMY_SPAWN_Y_RANGE)
-
-            candidate_rect = pygame.Rect(rx, ry, width, height)
-
-            overlap = False
-            for enemy in existing_enemies:
-                if candidate_rect.colliderect(enemy.rect):
-                    overlap = True
-                    break
-
-            if not overlap:
-                return rx, ry
-
-        return random.randint(0, SCREEN_WIDTH - width), random.randint(*ENEMY_SPAWN_Y_RANGE)
-
-
     def draw(self):
 
-        self.main_surface.blit(self.background, (0, 0))
+        shake_offset_x, shake_offset_y = 0, 0
 
-        brighten = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        brighten.fill((25, 25, 25))  # Adjust these numbers to change brightness
-        self.main_surface.blit(brighten, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
-        #self.screen.blit(self.background, (0, 0))
+        if self.shake_intensity > 0.1:
+            shake_offset_x = random.randint(-int(self.shake_intensity), int(self.shake_intensity))
+            shake_offset_y = random.randint(-int(self.shake_intensity), int(self.shake_intensity))
+            self.shake_intensity *= self.shake_decay
+            if self.shake_intensity <= 0: self.shake_intensity = 0
+
+        self.main_surface.blit(self.assets['bg'], (shake_offset_x, shake_offset_y))
 
         if random.randint(0, 100) > 90:
             flicker = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -342,6 +230,8 @@ class GameManager:
             overlay.fill((0, 0, 0))
             self.main_surface.blit(overlay, (0, 0))
 
+
+
             msg_surface = self.over_font.render("EARTH HAS FALLEN", True, (200, 200, 200))
             text_rect = msg_surface.get_rect()
             text_rect.center = (int(SCREEN_WIDTH / 2), int(SCREEN_HEIGHT / 2))
@@ -351,47 +241,64 @@ class GameManager:
             restart_rect = restart_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 50))
             self.main_surface.blit(restart_surface, restart_rect)
 
-        self.screen.fill((0,0,0))
-        self.screen.blit(self.main_surface, (-2, 0), special_flags=pygame.BLEND_RGB_ADD)
-        self.screen.blit(self.main_surface, (2, 0), special_flags=pygame.BLEND_RGB_ADD)
-        self.screen.blit(self.main_surface, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+        self.screen.fill((0, 0, 0))
 
+        # Brighten Screen
+        #brighten = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        #brighten.fill((25, 25, 25))  # Adjust these numbers to change brightness
+        #self.main_surface.blit(brighten, (0 + shake_offset_x, 0 + shake_offset_y), special_flags=pygame.BLEND_RGB_ADD)
 
+        # Chromatic Aberration
+        self.screen.blit(self.main_surface, (-2 + shake_offset_x, 0 + shake_offset_y), special_flags=pygame.BLEND_RGB_ADD)
+        self.screen.blit(self.main_surface, (2 + shake_offset_x, 0 + shake_offset_y), special_flags=pygame.BLEND_RGB_ADD)
+        self.screen.blit(self.main_surface, (0 + shake_offset_x, 0 + shake_offset_y), special_flags=pygame.BLEND_RGB_MULT)
 
-
+        # Post Processing Effects
         self.screen.blit(self.vignette, (0, 0))
         self.screen.blit(self.crt_texture, (0, 0))
 
-
+        # Draw UI (On top of affects)
         score_txt = self.font.render(f"Score : {self.score}", True, (255, 255, 255))
         level_txt = self.font.render(f"Level : {self.level}", True, (255, 255, 255))
         hi_txt = self.font.render(f"Best  : {self.high_score}", True, (255, 215, 0))
+        fps_val = int(self.clock.get_fps())
+        fps_txt = self.font.render(f"FPS: {fps_val}", True, (0, 255, 0))  # Green text for performance
+        self.screen.blit(fps_txt, (SCREEN_WIDTH - 250, 10))
         self.screen.blit(score_txt, (10, 10))
         self.screen.blit(level_txt, (10, 50))
         self.screen.blit(hi_txt, (10, 90))
 
-        fps_val = int(self.clock.get_fps())
-        fps_txt = self.font.render(f"FPS: {fps_val}", True, (0, 255, 0))  # Green text for performance
-        self.screen.blit(fps_txt, (SCREEN_WIDTH - 250, 10))
+        self.draw_bullet_hud()
 
+        pygame.display.flip()
 
-        pygame.display.update()
-
-    def run(self):
-        running = True
-        while running:
-            dt = self.clock.tick(FPS) / 1000.0
-
-            running = self.handle_events()
+    def update(self, dt, keys):
+        if self.freeze_timer > 0:
+            self.freeze_timer -= dt
+            if self.freeze_timer <= 0 and any(e.rect.y > COLLISION_DISTANCE for e in self.enemies):
+                self.game_over = True
+        else:
             if not self.game_over:
-                self.update_difficulty()
-                self.player.update(dt)
-                self.enemies.update(self.difficulty_multiplier, dt)
-
+                self.player.update(dt, keys)
                 self.bullets.update(dt)
+                for enemy in self.enemies: enemy.update(self.speed_multiplier, dt)
                 self.check_collisions()
 
+                if self.current_bullet_stock < self.max_bullet_stock:
+                    self.recharge_timer += dt
+                    if self.recharge_timer >= self.bullet_recharge_time:
+                        self.current_bullet_stock += 1
+                        self.recharge_timer = 0.0  # Reset timer for the next bullet
+
+    def run(self):
+        while self.running:
+            dt = self.clock.tick(FPS) / 1000.0
+            keys = pygame.key.get_pressed()
+
+            self.running = self.handle_events()
+            self.update(dt, keys)
             self.draw()
+
         pygame.quit()
 
 if __name__ == "__main__":
