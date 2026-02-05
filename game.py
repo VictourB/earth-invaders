@@ -3,6 +3,7 @@ import random
 from pygame import mixer
 from settings import *
 from entities import Player, Bullet, Enemy
+from fx import PostProcessor
 
 class GameManager:
     def __init__(self):
@@ -13,6 +14,8 @@ class GameManager:
         pygame.display.set_caption(TITLE)
         self.clock = pygame.time.Clock()
         self.running = True
+
+        self.fx = PostProcessor()
 
         # ---- Assets ----
         self.main_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -37,11 +40,6 @@ class GameManager:
 
         # ---- Load Score ----
         self.high_score_file = get_path("highscore.txt")
-
-        # ---- Post Processing Effects ----
-        self.crt_texture = self.create_crt_lines()
-        self.vignette = self.create_vignette()
-
         self.high_score = self.load_high_score()
 
         self.levels_per_difficulty = 50
@@ -51,10 +49,15 @@ class GameManager:
         self.hud_bullet_gray = self.hud_bullet.copy()
         self.hud_bullet_gray.fill((100, 100, 100), special_flags=pygame.BLEND_RGB_MULT)
 
-        self.reset_game()
+        # ---- State Machine
+        self.state = "MENU" # MENU, PLAYING, PAUSED, GAME_OVER
+        self.menu_options = ["DEFEND EARTH", "QUIT"]
+        self.menu_index = 0
 
-    def reset_game(self):
-        self.game_over = False
+        self.reset_game_state_vars()
+
+    def reset_game_state_vars(self):
+        """Resets variables, but does not necessarily start the game logic immediately."""
         self.score = 0
         self.level = 1
         self.speed_multiplier = 1.0
@@ -73,7 +76,13 @@ class GameManager:
         self.player = Player(self.assets["player"])
         self.enemies = pygame.sprite.Group()
 
-        self.spawn_enemies()
+        if self.state == "PLAYING":
+            self.spawn_enemies()
+
+    def start_new_game(self):
+        """Called when selecting Start from menu or Restarting."""
+        self.state = "PLAYING"
+        self.reset_game_state_vars()
         self.load_high_score()
 
     def load_high_score(self):
@@ -81,7 +90,7 @@ class GameManager:
             with open(self.high_score_file, "a+") as f:
                 f.seek(0)
                 content = f.read().strip()
-                return int(content)
+                return int(content) if content else 0
         except (FileNotFoundError, ValueError):
             return 0
 
@@ -99,23 +108,49 @@ class GameManager:
             y = random.randint(ENEMY_SPAWN_Y_MIN, ENEMY_SPAWN_Y_MAX)
             self.enemies.add(Enemy(self.assets["enemy"], x, y))
 
-    def trigger_shake(self, intensity, duration= .5):
-        self.shake_intensity = intensity
-        self.freeze_timer = duration
-
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
 
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE and not self.game_over and self.current_bullet_stock > 0:
-                    self.bullets.add(Bullet(self.assets["bullet"], self.player.rect.centerx, self.player.rect.top))
-                    self.bullet_sound.play()
-                    self.current_bullet_stock -= 1
+                # ---- Menu
+                if self.state == "MENU":
+                    if event.key == pygame.K_UP:
+                        self.menu_index = (self.menu_index - 1) % len(self.menu_options)
+                    elif event.key == pygame.K_DOWN:
+                        self.menu_index = (self.menu_index + 1) % len(self.menu_options)
+                    elif event.key == pygame.K_RETURN:
+                        if self.menu_index == 0:  # Start
+                            self.start_new_game()
+                        elif self.menu_index == 1:  # Quit
+                            return False
 
-                if self.game_over and event.key == pygame.K_r:
-                    self.reset_game()
+                # ---- PLAYING
+                elif self.state == "PLAYING":
+                    if event.key == pygame.K_ESCAPE: # or pygame.K_p:
+                        self.state = "PAUSED"
+
+
+
+                    elif event.key == pygame.K_SPACE and self.current_bullet_stock > 0:
+                        self.bullets.add(Bullet(self.assets["bullet"], self.player.rect.centerx, self.player.rect.top))
+                        self.bullet_sound.play()
+                        self.current_bullet_stock -= 1
+
+                # ---- PAUSED
+                elif self.state == "PAUSED":
+                    if event.key == pygame.K_ESCAPE: # or event.key == pygame.K_p:
+                        self.state = "PLAYING"
+                    elif event.key == pygame.K_q:
+                        self.state = "MENU"
+
+                # ---- GAME OVER
+                elif self.state == 'GAME_OVER':
+                    if event.key == pygame.K_r:
+                        self.start_new_game()
+                    elif event.key == pygame.K_ESCAPE:
+                        self.state = "MENU"
 
         return True
 
@@ -131,7 +166,7 @@ class GameManager:
 
         for enemy in self.enemies:
             if enemy.rect.y > COLLISION_DISTANCE:
-                if not self.game_over and self.freeze_timer <= 0:
+                if self.state == "PLAYING" and self.freeze_timer <= 0:
                     self.trigger_shake(30, 1.0)
                     self.save_high_score()
                 break
@@ -146,12 +181,12 @@ class GameManager:
 
             if i < self.current_bullet_stock:
                 # 1. We have this bullet - Draw normally
-                self.screen.blit(self.hud_bullet, (x, start_y))
+                self.main_surface.blit(self.hud_bullet, (x, start_y))
 
             elif i == self.current_bullet_stock:
                 # 2. This is the bullet currently RECHARGING
                 # Draw the gray base first
-                self.screen.blit(self.hud_bullet_gray, (x, start_y))
+                self.main_surface.blit(self.hud_bullet_gray, (x, start_y))
 
                 # Calculate how much of the "color" bullet to show from the bottom
                 # progress is 0.0 to 1.0
@@ -166,11 +201,11 @@ class GameManager:
                 clip_rect = pygame.Rect(0, height - visible_height, self.hud_bullet.get_width(), visible_height)
 
                 # Blit the colored bullet using the area parameter to only show the bottom
-                self.screen.blit(self.hud_bullet, (x, start_y + (height - visible_height)), clip_rect)
+                self.main_surface.blit(self.hud_bullet, (x, start_y + (height - visible_height)), clip_rect)
 
             else:
                 # 3. This bullet is empty and waiting its turn - Draw fully gray
-                self.screen.blit(self.hud_bullet_gray, (x, start_y))
+                self.main_surface.blit(self.hud_bullet_gray, (x, start_y))
 
     def update_difficulty(self):
         """Speeds up the game after killing a certain amount of enemies"""
@@ -179,106 +214,134 @@ class GameManager:
             self.max_bullet_stock += 1
         print(f"Current Level: {self.level}")
 
-    @staticmethod
-    def create_crt_lines():
-        crt_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        line_color = (10, 10, 10, 80)
+    def trigger_shake(self, intensity, duration=0.5):
+        self.fx.trigger_shake(intensity)
+        self.freeze_timer = duration
 
-        for y in range(0, SCREEN_HEIGHT, 3):
-            pygame.draw.line(crt_surface, line_color, (0, y), (SCREEN_WIDTH, y))
+    def draw_menu(self):
+        """Draws the main menu on the main surface."""
+        # Dim background
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        overlay.set_alpha(100)
+        overlay.fill((0, 0, 0))
+        self.main_surface.blit(overlay, (0, 0))
 
-        return crt_surface
+        # Title
+        title_surf = self.over_font.render(TITLE, True, CYAN)
+        title_rect = title_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT * 0.3))
+        self.main_surface.blit(title_surf, title_rect)
 
-    @staticmethod
-    def create_vignette():
-        vignette_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        # Options
+        for i, option in enumerate(self.menu_options):
+            color = GOLD if i == self.menu_index else WHITE
+            txt_surf = self.font.render(option, True, color)
+            txt_rect = txt_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT * 0.5 + i * 60))
 
-        for i in range(0,100,10):
-            alpha = 150 - (i * 1.5)
-            pygame.draw.rect(vignette_surface, (0, 0, 0, alpha),
-                             vignette_surface.get_rect().inflate(-i*1.5, -i*1.5), 25, border_radius=10)
+            if i == self.menu_index:
+                # Draw a little cursor >
+                cursor = self.font.render(">", True, RED)
+                self.main_surface.blit(cursor, (txt_rect.left - 40, txt_rect.top))
 
-        return vignette_surface
+            self.main_surface.blit(txt_surf, txt_rect)
+
+        # ---- NEW CODE: High Score Display ----
+        # Draw a separator line
+        pygame.draw.line(self.main_surface, WHITE,
+                       (SCREEN_WIDTH / 2 - 100, SCREEN_HEIGHT * 0.75),
+                        (SCREEN_WIDTH / 2 + 100, SCREEN_HEIGHT * 0.75), 2)
+
+        # Draw the score
+        hi_score_surf = self.font.render(f"BEST: {self.high_score}", True, GOLD)
+        hi_score_rect = hi_score_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT * 0.82))
+        self.main_surface.blit(hi_score_surf, hi_score_rect)
+
+    def draw_pause_overlay(self):
+        """Draws pause text over the frozen game."""
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        overlay.set_alpha(150)
+        overlay.fill((0, 0, 0))
+        self.main_surface.blit(overlay, (0, 0))
+
+        txt_surf = self.over_font.render("PAUSED", True, WHITE)
+        txt_rect = txt_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2))
+        self.main_surface.blit(txt_surf, txt_rect)
+
+        sub_surf = self.font.render("Press Q to Quit to Main Menu", True, GRAY_HUD)
+        sub_rect = sub_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 60))
+        self.main_surface.blit(sub_surf, sub_rect)
+
+    def draw_ui_to_main(self):
+        score_txt = self.font.render(f"Score : {self.score}", True, WHITE)
+        level_txt = self.font.render(f"Level : {self.level}", True, WHITE)
+        hi_txt = self.font.render(f"Best  : {self.high_score}", True, GOLD)
+
+        self.main_surface.blit(score_txt, (10, 10))
+        self.main_surface.blit(level_txt, (10, 50))
+        self.main_surface.blit(hi_txt, (10, 90))
 
     def draw(self):
 
-        shake_offset_x, shake_offset_y = 0, 0
+        # 1. Background (Always draw this so we don't get trails)
+        self.main_surface.blit(self.assets['bg'], (0, 0))
 
-        if self.shake_intensity > 0.1:
-            shake_offset_x = random.randint(-int(self.shake_intensity), int(self.shake_intensity))
-            shake_offset_y = random.randint(-int(self.shake_intensity), int(self.shake_intensity))
-            self.shake_intensity *= self.shake_decay
-            if self.shake_intensity <= 0: self.shake_intensity = 0
-
-        self.main_surface.blit(self.assets['bg'], (shake_offset_x, shake_offset_y))
-
-        if random.randint(0, 100) > 90:
-            flicker = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-            flicker.set_alpha(random.randint(5,12))
-            flicker.fill((150, 150, 150))
-            self.screen.blit(flicker, (0, 0))
-
-        if not self.game_over:
+        # 2. Game Elements (Draw if Playing, Paused, or Game Over)
+        if self.state != "MENU":
             self.main_surface.blit(self.player.image, self.player.rect)
             self.enemies.draw(self.main_surface)
             self.bullets.draw(self.main_surface)
 
-        if self.game_over:
+        # 3. State-Specific Overlays (Drawn to main_surface to get FX)
+        if self.state == "MENU":
+            self.draw_menu()
+
+        elif self.state == "PAUSED":
+            self.draw_pause_overlay()
+
+        elif self.state == "GAME_OVER":
             # Game Over Overlay
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
             overlay.set_alpha(150)
             overlay.fill((0, 0, 0))
             self.main_surface.blit(overlay, (0, 0))
 
-
-
             msg_surface = self.over_font.render("EARTH HAS FALLEN", True, (200, 200, 200))
             text_rect = msg_surface.get_rect()
             text_rect.center = (int(SCREEN_WIDTH / 2), int(SCREEN_HEIGHT / 2))
             self.main_surface.blit(msg_surface, text_rect)
 
-            restart_surface = self.font.render("Press R to try again", True, (200, 200, 200))
+            restart_surface = self.font.render("Press R to Retry", True, (200, 200, 200))
             restart_rect = restart_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 50))
             self.main_surface.blit(restart_surface, restart_rect)
 
-        self.screen.fill((0, 0, 0))
+        # self.fx.render(self.main_surface, self.screen)
 
-        # Brighten Screen
-        #brighten = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        #brighten.fill((25, 25, 25))  # Adjust these numbers to change brightness
-        #self.main_surface.blit(brighten, (0 + shake_offset_x, 0 + shake_offset_y), special_flags=pygame.BLEND_RGB_ADD)
-
-        # Chromatic Aberration
-        self.screen.blit(self.main_surface, (-2 + shake_offset_x, 0 + shake_offset_y), special_flags=pygame.BLEND_RGB_ADD)
-        self.screen.blit(self.main_surface, (2 + shake_offset_x, 0 + shake_offset_y), special_flags=pygame.BLEND_RGB_ADD)
-        self.screen.blit(self.main_surface, (0 + shake_offset_x, 0 + shake_offset_y), special_flags=pygame.BLEND_RGB_MULT)
-
-        # Post Processing Effects
-        self.screen.blit(self.vignette, (0, 0))
-        self.screen.blit(self.crt_texture, (0, 0))
 
         # Draw UI (On top of affects)
-        score_txt = self.font.render(f"Score : {self.score}", True, (255, 255, 255))
-        level_txt = self.font.render(f"Level : {self.level}", True, (255, 255, 255))
-        hi_txt = self.font.render(f"Best  : {self.high_score}", True, (255, 215, 0))
+        if self.state == "PLAYING" or self.state == "PAUSED" or self.state == "GAME_OVER":
+            self.draw_ui_to_main()
+
+            if self.state != "GAME_OVER":
+                self.draw_bullet_hud()
+
+
         fps_val = int(self.clock.get_fps())
         fps_txt = self.font.render(f"FPS: {fps_val}", True, (0, 255, 0))  # Green text for performance
-        self.screen.blit(fps_txt, (SCREEN_WIDTH - 250, 10))
-        self.screen.blit(score_txt, (10, 10))
-        self.screen.blit(level_txt, (10, 50))
-        self.screen.blit(hi_txt, (10, 90))
 
-        self.draw_bullet_hud()
-
+        self.fx.render(self.main_surface, self.screen)
+        self.screen.blit(fps_txt, (SCREEN_WIDTH - 250, 10)) # FPS Counter
         pygame.display.flip()
 
     def update(self, dt, keys):
-        if self.freeze_timer > 0:
-            self.freeze_timer -= dt
-            if self.freeze_timer <= 0 and any(e.rect.y > COLLISION_DISTANCE for e in self.enemies):
-                self.game_over = True
-        else:
-            if not self.game_over:
+        # Always update FX (so shake decays even if game over, or static flickers in menu)
+        # Assuming you might want menu background animation later.
+
+        if self.state == "PLAYING":
+            # Logic when Game is Active
+            if self.freeze_timer > 0:
+                self.freeze_timer -= dt
+                if self.freeze_timer <= 0 and any(e.rect.y > COLLISION_DISTANCE for e in self.enemies):
+                    self.state = "GAME_OVER"
+            else:
                 self.player.update(dt, keys)
                 self.bullets.update(dt)
                 for enemy in self.enemies: enemy.update(self.speed_multiplier, dt)
@@ -288,14 +351,24 @@ class GameManager:
                     self.recharge_timer += dt
                     if self.recharge_timer >= self.bullet_recharge_time:
                         self.current_bullet_stock += 1
-                        self.recharge_timer = 0.0  # Reset timer for the next bullet
+                        self.recharge_timer = 0.0
+
+        elif self.state == "MENU":
+            # You could add background rotation or floaty enemies here
+            pass
+
+        elif self.state == "PAUSED":
+            # Game logic is frozen
+            pass
 
     def run(self):
         while self.running:
             dt = self.clock.tick(FPS) / 1000.0
             keys = pygame.key.get_pressed()
 
-            self.running = self.handle_events()
+            if not self.handle_events():
+                self.running = False
+
             self.update(dt, keys)
             self.draw()
 

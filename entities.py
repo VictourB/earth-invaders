@@ -35,6 +35,7 @@ class Bullet(Entity):
         self.speed = 700.0
 
     def update(self, dt):
+        self.pos_y -= self.speed * dt
         self.rect.y -= self.speed * dt
         if self.rect.y < -32:
             self.kill()

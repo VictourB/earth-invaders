@@ -25,7 +25,7 @@ RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 GOLD = (255, 215, 0)
 CYAN = (0, 255, 255)
-GRAY_HUD = (100, 100, 100)
+GRAY_HUD = (150, 150, 150)
 
 # --- Asset Paths ---
 BASE_PATH = os.path.abspath(os.path.dirname(__file__))
