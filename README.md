@@ -3,6 +3,9 @@
 
 # Earth Invaders 
 Earth Invaders is a high-fidelity, retro-style arcade shooter built with Python and Pygame. It features modern sub-pixel physics, a dynamic difficulty system, and an authentic CRT monitor simulation including scanlines, vignettes, and chromatic aberration.
+
+![Screenshot of the game](Earth_Invaders.png)
+
  ## Controls
  * Left / Right Arrow Keys: Move your spaceship.
  * Spacebar: Fire missiles.
