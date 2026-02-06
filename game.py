@@ -1,9 +1,11 @@
 import pygame
 import random
+import math
 from pygame import mixer
 from settings import *
-from entities import Player, Bullet, Enemy
+from entities import Player, Bullet, Enemy, ShooterEnemy, Particle, UFO
 from fx import PostProcessor
+from audio import AudioManager
 
 class GameManager:
     def __init__(self):
@@ -22,17 +24,15 @@ class GameManager:
         self.assets = {
             "player": pygame.image.load(get_path("assets/spaceship_2.png",)).convert_alpha(),
             "enemy": pygame.image.load(get_path("assets/invadership.png",)).convert_alpha(),
+            "enemy_shooter": pygame.image.load(get_path("assets/invadership_shooter.png")).convert_alpha(),
             "bullet": pygame.image.load(get_path("assets/spaceMissile.png",)).convert_alpha(),
-            "bg": pygame.image.load(get_path("assets/earth_background.png")).convert()
+            "ufo": pygame.image.load(get_path("assets/ufo.png")).convert_alpha(),
+            "bg": pygame.image.load(get_path("assets/earth_background_transparent.png")).convert_alpha()
         }
 
-        # ---- Audio ----
-        self.bullet_sound = mixer.Sound(get_path("assets/audio/firing_sound.wav"))
-        self.explosion_sound = mixer.Sound(get_path("assets/audio/explosion_sound.wav"))
-
-        # ---- Music ----
-        mixer.music.load(get_path("assets/audio/background_music.wav"))
-        mixer.music.play(-1)
+        # ---- Music and Audio ----
+        self.audio = AudioManager(self.assets)
+        self.audio.play_music("menu")
 
         # ---- Font ----
         self.font = pygame.font.Font("assets/font/PressStart2P-Regular.ttf", 32)
@@ -49,10 +49,29 @@ class GameManager:
         self.hud_bullet_gray = self.hud_bullet.copy()
         self.hud_bullet_gray.fill((100, 100, 100), special_flags=pygame.BLEND_RGB_MULT)
 
+        # ---- Parallax Setup ----
+        self.star_layers = []
+        # Create 3 layers of stars with different densities and speeds
+        for i in range(3):
+            layer_stars = []
+            num_stars = 50 // (i + 1)
+            for _ in range(num_stars):
+                # Random (x, y)
+                star_x = random.randint(0, SCREEN_WIDTH)
+                star_y = random.randint(0, SCREEN_HEIGHT)
+                layer_stars.append([star_x, star_y])
+
+            # Speed: further stars (index 2) move slower
+            speed = 20.0 * (i + 1)
+            self.star_layers.append(
+                {"stars": layer_stars, "speed": speed, "color": (150, 150, 150) if i == 0 else WHITE})
+
         # ---- State Machine
         self.state = "MENU" # MENU, PLAYING, PAUSED, GAME_OVER
         self.menu_options = ["DEFEND EARTH", "QUIT"]
         self.menu_index = 0
+
+
 
         self.reset_game_state_vars()
 
@@ -73,11 +92,17 @@ class GameManager:
 
         # ---- Create Entities ----
         self.bullets = pygame.sprite.Group()
+        self.enemy_bullets = pygame.sprite.Group()
         self.player = Player(self.assets["player"])
         self.enemies = pygame.sprite.Group()
+        self.particles = pygame.sprite.Group()
+
+        self.ufo_group = pygame.sprite.GroupSingle()  # Use GroupSingle because there's usually only one UFO
+        self.ufo_spawn_timer = random.uniform(10.0, 20.0)  # Seconds until next UFO
 
         if self.state == "PLAYING":
             self.spawn_enemies()
+            pass
 
     def start_new_game(self):
         """Called when selecting Start from menu or Restarting."""
@@ -100,13 +125,23 @@ class GameManager:
             with open(self.high_score_file, "w") as f:
                 f.write(str(self.high_score))
 
+    def create_explosion(self, x, y, color, count=20):
+        for _ in range(count):
+            self.particles.add(Particle(x, y, color))
+
     def spawn_enemies(self):
         self.enemies.empty()
+        self.enemy_bullets.empty()
         self.update_difficulty()
+
         for _ in range(5 + self.level):
             x = random.randint(50, SCREEN_WIDTH - 100)
             y = random.randint(ENEMY_SPAWN_Y_MIN, ENEMY_SPAWN_Y_MAX)
-            self.enemies.add(Enemy(self.assets["enemy"], x, y))
+
+            if self.level >= 5 and random.random() < 0.3:
+                self.enemies.add(ShooterEnemy(self.assets["enemy_shooter"], x, y, self.assets["bullet"]))
+            else:
+                self.enemies.add(Enemy(self.assets["enemy"], x, y))
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -128,18 +163,24 @@ class GameManager:
 
                 # ---- PLAYING
                 elif self.state == "PLAYING":
+
                     if event.key == pygame.K_ESCAPE: # or pygame.K_p:
                         self.state = "PAUSED"
+                    if event.key == pygame.K_EQUALS:
+                        self.level += 1
+                        self.spawn_enemies()
+                        print(f"DEBUG: Advanced to Level {self.level}")
 
 
 
                     elif event.key == pygame.K_SPACE and self.current_bullet_stock > 0:
                         self.bullets.add(Bullet(self.assets["bullet"], self.player.rect.centerx, self.player.rect.top))
-                        self.bullet_sound.play()
+                        self.audio.play_sfx("shoot")
                         self.current_bullet_stock -= 1
 
                 # ---- PAUSED
                 elif self.state == "PAUSED":
+
                     if event.key == pygame.K_ESCAPE: # or event.key == pygame.K_p:
                         self.state = "PLAYING"
                     elif event.key == pygame.K_q:
@@ -155,21 +196,46 @@ class GameManager:
         return True
 
     def check_collisions(self):
+
+        # Player's Bullets -> Enemies
         hits = pygame.sprite.groupcollide(self.enemies, self.bullets, True, True, pygame.sprite.collide_mask)
         for hit in hits:
-            self.score += 10
-            self.explosion_sound.play()
+            self.score += hit.points
+            self.audio.play_sfx("explosion")
+            self.create_explosion(hit.rect.centerx, hit.rect.centery, GOLD, count=15)
             if not self.enemies:
                 self.level += 1
-                self.speed_multiplier += 0.2
                 self.spawn_enemies()
 
+        # Enemy Bullets -> Player
+        if pygame.sprite.spritecollide(self.player, self.enemy_bullets, True, pygame.sprite.collide_mask):
+            self.player_death_sequence()
+
         for enemy in self.enemies:
-            if enemy.rect.y > COLLISION_DISTANCE:
+            if enemy.rect.bottom >= COLLISION_DISTANCE:
                 if self.state == "PLAYING" and self.freeze_timer <= 0:
-                    self.trigger_shake(30, 1.0)
-                    self.save_high_score()
+                    self.player_death_sequence()
                 break
+
+        # Player Bullets vs UFO
+        ufo_hit = pygame.sprite.groupcollide(self.ufo_group, self.bullets, True, True,
+                                                     pygame.sprite.collide_mask)
+        for hit in ufo_hit:
+            self.audio.stop_sfx("ufo")
+            self.score += hit.points
+            self.audio.play_sfx("explosion")
+            self.create_explosion(hit.rect.centerx, hit.rect.centery, GOLD, count=30)
+            # Maybe trigger a unique screen shake for the UFO?
+            self.fx.trigger_shake(15, 0.3)
+
+    def player_death_sequence(self):
+        self.audio.set_volume(0.2)  # Lower background music
+        self.audio.play_sfx("explosion")
+        # After a delay, switch to game over music
+        self.create_explosion(self.player.rect.centerx, self.player.rect.centery, RED, count=50)
+        self.trigger_shake(50, 2.0)  # Big shake
+        self.state = "GAME_OVER"
+        self.save_high_score()
 
     def draw_bullet_hud(self):
         start_x = 10
@@ -207,8 +273,20 @@ class GameManager:
                 # 3. This bullet is empty and waiting its turn - Draw fully gray
                 self.main_surface.blit(self.hud_bullet_gray, (x, start_y))
 
+    def update_background(self, dt):
+        for layer in self.star_layers:
+            for star in layer["stars"]:
+                # Move star downward
+                star[1] += layer["speed"] * dt
+
+                # Wrap around if it leaves the bottom
+                if star[1] > SCREEN_HEIGHT:
+                    star[1] = 0
+                    star[0] = random.randint(0, SCREEN_WIDTH)
+
     def update_difficulty(self):
         """Speeds up the game after killing a certain amount of enemies"""
+        self.speed_multiplier += 0.2
         self.speed_multiplier = 1.0 + (self.level - 1) * self.difficulty_step
         if self.level % 5 == 0:
             self.max_bullet_stock += 1
@@ -279,16 +357,69 @@ class GameManager:
         self.main_surface.blit(level_txt, (10, 50))
         self.main_surface.blit(hi_txt, (10, 90))
 
+    def draw_parallax(self):
+        # 1. Draw static earth background first
+        self.main_surface.blit(self.assets["bg"], (0, 0))
+
+        # 2. Draw moving star layers
+        for i, layer in enumerate(self.star_layers):
+            # i=0 is furthest, i=2 is closest
+            size = i + 1
+            for star in layer["stars"]:
+                pygame.draw.rect(self.main_surface, layer["color"], (star[0], star[1], size, size))
+
+        # 3. Draw the Earth background OVER the stars
+        # Because the PNG has transparency, the stars will only show through the "holes"
+        self.main_surface.blit(self.assets["bg"], (0, 0))
+
+    def draw_danger_zone(self):
+        # Create a flicker effect using the current time
+        # This oscillates between 50 and 150 alpha for a pulsing "warning" look
+
+        # Pulse speed increases if enemies are very close
+        proximity_warning = any(e.rect.bottom > COLLISION_DISTANCE - 125 for e in self.enemies)
+        pulse_speed = 0.02 if proximity_warning else 0.01
+
+        flicker = int(100 + math.sin(pygame.time.get_ticks() * 0.01) * 50)
+
+        # 2. The Warning Zone (Transparent red floor)
+        warning_floor = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT - COLLISION_DISTANCE))
+        warning_floor.set_alpha(flicker // 4)  # Very faint
+        warning_floor.fill((200, 0, 0))
+        self.main_surface.blit(warning_floor, (0, COLLISION_DISTANCE))
+
+        # 3. Text Alert
+        if proximity_warning:
+            msg = "CAUTION: BREACH IMMINENT" if any(
+                e.rect.bottom > COLLISION_DISTANCE - 50 for e in self.enemies) else "!!! ENEMY PROXIMITY !!!"
+            warn_txt = self.font.render(msg, True, (255, flicker, flicker))
+            self.main_surface.blit(warn_txt, (SCREEN_WIDTH // 2 - warn_txt.get_width() // 2, SCREEN_HEIGHT - 34))
+
+
+        # Create a temporary surface for transparency
+        danger_surf = pygame.Surface((SCREEN_WIDTH, 2))
+        danger_surf.set_alpha(flicker)
+        danger_surf.fill(DANGER_COLOR)
+
+        # Draw the line
+        self.main_surface.blit(danger_surf, (0, COLLISION_DISTANCE))
+
     def draw(self):
 
+        self.main_surface.fill(SPACE_COLOR)
         # 1. Background (Always draw this so we don't get trails)
-        self.main_surface.blit(self.assets['bg'], (0, 0))
+        #self.main_surface.blit(self.assets['bg'], (0, 0))
+
+        self.draw_parallax()
 
         # 2. Game Elements (Draw if Playing, Paused, or Game Over)
         if self.state != "MENU":
+            self.particles.draw(self.main_surface)
             self.main_surface.blit(self.player.image, self.player.rect)
             self.enemies.draw(self.main_surface)
             self.bullets.draw(self.main_surface)
+            self.enemy_bullets.draw(self.main_surface)
+            self.ufo_group.draw(self.main_surface)
 
         # 3. State-Specific Overlays (Drawn to main_surface to get FX)
         if self.state == "MENU":
@@ -318,6 +449,7 @@ class GameManager:
 
         # Draw UI (On top of affects)
         if self.state == "PLAYING" or self.state == "PAUSED" or self.state == "GAME_OVER":
+            self.draw_danger_zone()
             self.draw_ui_to_main()
 
             if self.state != "GAME_OVER":
@@ -334,9 +466,11 @@ class GameManager:
     def update(self, dt, keys):
         # Always update FX (so shake decays even if game over, or static flickers in menu)
         # Assuming you might want menu background animation later.
+        self.update_background(dt)
 
         if self.state == "PLAYING":
             # Logic when Game is Active
+            self.audio.play_music("playing")
             if self.freeze_timer > 0:
                 self.freeze_timer -= dt
                 if self.freeze_timer <= 0 and any(e.rect.y > COLLISION_DISTANCE for e in self.enemies):
@@ -344,7 +478,14 @@ class GameManager:
             else:
                 self.player.update(dt, keys)
                 self.bullets.update(dt)
-                for enemy in self.enemies: enemy.update(self.speed_multiplier, dt)
+                self.enemy_bullets.update(dt)
+
+                for enemy in self.enemies:
+                    if hasattr(enemy, "fire"):
+                        enemy.update(self.speed_multiplier, dt, self.enemy_bullets)
+                    else:
+                        enemy.update(self.speed_multiplier, dt)
+
                 self.check_collisions()
 
                 if self.current_bullet_stock < self.max_bullet_stock:
@@ -353,12 +494,46 @@ class GameManager:
                         self.current_bullet_stock += 1
                         self.recharge_timer = 0.0
 
+            self.particles.update(dt)
+
+            # ENGINE EXHAUST LOGIC
+            # Spawn small blue/white particles at the back of the player
+            if random.random() > 0.5:  # Don't spawn every frame to save performance
+                exhaust_x = self.player.rect.centerx + random.randint(-5, 5)
+                exhaust_y = self.player.rect.bottom - 10
+                # Give exhaust a downward velocity
+                self.particles.add(Particle(
+                    exhaust_x, exhaust_y, CYAN,
+                    velocity=(random.uniform(-20, 20), random.uniform(100, 200)),
+                    lifetime=0.3, size=3
+                ))
+
+            # ---- Spawn UFO
+            if not self.ufo_group:  # Only spawn if one isn't already there
+                self.ufo_spawn_timer -= dt
+                if self.ufo_spawn_timer <= 0:
+                    self.audio.play_sfx("ufo", loops=-1)
+                    side = random.choice(["left", "right"])
+                    self.ufo_group.add(UFO(self.assets["ufo"], side))
+                    self.ufo_spawn_timer = random.uniform(15.0, 30.0)
+            else:
+                self.ufo_group.update(dt)
+                if not self.ufo_group:
+                    self.audio.stop_sfx("ufo")
+
+
         elif self.state == "MENU":
             # You could add background rotation or floaty enemies here
+            self.audio.play_music("menu")
             pass
 
         elif self.state == "PAUSED":
             # Game logic is frozen
+            self.audio.play_music("menu")
+            pass
+
+        elif self.state == "GAME_OVER":
+            self.audio.play_music("game_over")
             pass
 
     def run(self):

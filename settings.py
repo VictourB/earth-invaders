@@ -9,7 +9,7 @@ TITLE = "Earth Invaders"
 # --- Gameplay ---
 PLAYER_START_X = SCREEN_WIDTH / 2
 PLAYER_START_Y = SCREEN_HEIGHT * 0.85
-COLLISION_DISTANCE = int(SCREEN_HEIGHT * 0.75)
+COLLISION_DISTANCE = int(SCREEN_HEIGHT * 0.85)
 ENEMY_SPAWN_Y_MIN = 20
 ENEMY_SPAWN_Y_MAX = 250
 
@@ -26,9 +26,18 @@ GREEN = (0, 255, 0)
 GOLD = (255, 215, 0)
 CYAN = (0, 255, 255)
 GRAY_HUD = (150, 150, 150)
+SPACE_COLOR = (24, 20, 37)
+
+
+DANGER_COLOR = (255, 0, 0) # Red
 
 # --- Asset Paths ---
 BASE_PATH = os.path.abspath(os.path.dirname(__file__))
+
+# --- Scoring ---
+ENEMY_POINTS_NORMAL = 10
+ENEMY_POINTS_SHOOTER = 50
+ENEMY_POINTS_UFO = 200 # Baseline or random
 
 def get_path(filename):
     """Helper to join paths relative to this file."""

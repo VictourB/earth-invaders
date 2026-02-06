@@ -11,7 +11,7 @@ full_path_battleship = os.path.join(APP_FOLDER, "battleship.png")
 full_path_earth = os.path.join(APP_FOLDER, "Earth-800x600.png")
 full_path_missle = os.path.join(APP_FOLDER, "missile_sprite.png")
 full_path_space_ship = os.path.join(APP_FOLDER, "Space Ship.png")
-full_path_explosion_se = os.path.join(APP_FOLDER, "explosion_sound.wav")
+full_path_explosion_se = os.path.join(APP_FOLDER, "explosion.wav")
 full_path_firing_se = os.path.join(APP_FOLDER, "firing_sound.wav")
 
 pygame.init() # initalize the pygame

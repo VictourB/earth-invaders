@@ -1,5 +1,10 @@
+import random
+
 import pygame
 import math
+
+from pygame.transform import scale_by
+
 from settings import *
 
 class Entity(pygame.sprite.Sprite):
@@ -23,21 +28,26 @@ class Entity(pygame.sprite.Sprite):
         self.rect.y = int(self.pos_y)
 
 class Bullet(Entity):
-    def __init__(self, surface, x, y):
+    def __init__(self, surface, x, y, direction = -1):
+        """direction: -1 for UP, 1 for down"""
         super().__init__(surface, x, y, scaling_factor=.5)
 
         self.rect.centerx = x
-        self.rect.bottom = y + 25
+        if direction == -1:
+            self.rect.bottom = y + 25
+        else:
+            self.rect.top = y
 
         self.pos_x = float(self.rect.x)
         self.pos_y = float(self.rect.y)
 
         self.speed = 700.0
+        self.direction = direction
 
     def update(self, dt):
-        self.pos_y -= self.speed * dt
-        self.rect.y -= self.speed * dt
-        if self.rect.y < -32:
+        self.pos_y += (self.speed * self.direction) * dt
+        self.rect.y = int(self.pos_y)
+        if self.rect.bottom < 0 or self.rect.top > SCREEN_HEIGHT:
             self.kill()
 
 class Player(Entity):
@@ -92,10 +102,11 @@ class Player(Entity):
         self.move(dt)
 
 class Enemy(Entity):
-    def __init__(self, surface, x, y):
+    def __init__(self, surface, x, y, points=ENEMY_POINTS_NORMAL):
         super().__init__(surface, x, y, 2)
 
         self.image = pygame.transform.flip(self.image, False, True)
+        self.points = points
 
         # Override initial positions from super
         self.pos_x = float(x)
@@ -134,3 +145,83 @@ class Enemy(Entity):
         # 3. Update the Rect
         self.rect.x = int(self.pos_x)
         self.rect.y = int(self.pos_y)
+
+class ShooterEnemy(Enemy):
+    def __init__(self, surface, x, y, bullet_img):
+        super().__init__(surface, x, y, points=ENEMY_POINTS_SHOOTER)
+        self.bullet_img = bullet_img
+
+        # ---- Shooting Setup
+        self.shoot_timer = random.uniform(0.5, 2.0)
+        self.shoot_interval = 2.5
+
+    def update(self, speed_multiplier, dt, bullet_group):
+        super().update(speed_multiplier, dt)
+
+        self.shoot_timer -= dt
+        if self.shoot_timer <= 0:
+            self.shoot_timer = self.shoot_interval + random.uniform(-0.5, 0.5)
+            self.fire(bullet_group)
+
+    def fire(self, bullet_group):
+        b = Bullet(self.bullet_img, self.rect.centerx, self.rect.bottom, direction=1)
+        bullet_group.add(b)
+
+class Particle(pygame.sprite.Sprite):
+    def __init__(self, x, y ,color, velocity=None, lifetime=0.5, size=8):
+        super().__init__()
+        self.image = pygame.Surface((size, size))
+        self.image.fill(color)
+        self.rect = self.image.get_rect(center=(x, y))
+
+        self.pos_x = float(x)
+        self.pos_y = float(y)
+
+        self.size = size
+        self.color = color
+
+        if velocity:
+            self.vel_x, self.vel_y = velocity
+        else:
+            self.vel_x = random.uniform(-150, 150)
+            self.vel_y = random.uniform(-150, 150)
+
+        self.max_lifetime = lifetime
+        self.lifetime = lifetime
+
+    def update(self, dt):
+        self.lifetime -= dt
+        if self.lifetime <= 0:
+            self.kill()
+            return
+
+        # Move
+        self.pos_x += self.vel_x * dt
+        self.pos_y += self.vel_y * dt
+
+        self.rect.x = int(self.pos_x)
+        self.rect.y = int(self.pos_y)
+
+        # Shrink over time: start at original size and go to 0
+        current_size = max(1, int(self.size * (self.lifetime / self.max_lifetime)))
+        self.image = pygame.Surface((current_size, current_size))
+        self.image.fill(self.color)  # You'll need to store self.color and self.size in __init__
+
+class UFO(Entity):
+    def __init__(self, surface, side="left"):
+        # side: "left" starts at x=0, moves right. "right" starts at x=width, moves left.
+        y = 30
+        x = -64 if side =='left' else SCREEN_WIDTH + 64
+        super().__init__(surface, x, y, scaling_factor=2.0)
+
+        self.points = random.choice([100, 200, 500])
+        self.speed = 250.0
+        self.direction = 1 if side == 'left' else -1
+
+    def update(self, dt):
+        self.pos_x += (self.speed * self.direction) * dt
+        self.rect.x = int(self.pos_x)
+
+        if (self.direction == 1 and self.rect.left > SCREEN_WIDTH) or (self.direction == -1 and self.rect.right < 0):
+            self.kill()
+
