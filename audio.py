@@ -22,13 +22,13 @@ class AudioManager:
         self.master_volume = 0.5
         self.set_volume(self.master_volume)
 
-    def play_music(self, key, loops=-1, fade_ms=2000):
+    def play_music(self, key, loops=-1, fade_ms=2000, start=0.0):
         if self.current_track == key:
             return
         if key in self.music_tracks:
             try:
                 pygame.mixer.music.load(self.music_tracks[key])
-                pygame.mixer.music.play(loops, fade_ms=fade_ms)
+                pygame.mixer.music.play(loops, start=start, fade_ms=fade_ms)
 
                 self.current_track = key
             except pygame.error as e:
@@ -44,11 +44,33 @@ class AudioManager:
         if key in self.sfx:
             self.sfx[key].stop()
 
+    def stop_music(self, fade_ms=1000):
+        pygame.mixer.music.fadeout(fade_ms)
+        self.current_track = None
+
     def set_volume(self, volume):
         self.master_volume = volume
         pygame.mixer.music.set_volume(volume)
         for sound in self.sfx.values():
             sound.set_volume(volume)
+
+    def pause_sfx(self):
+        # Only pauses sound effects (UFO, Bullets), leaves Music stream alone
+        pygame.mixer.pause()
+
+    def unpause_sfx(self):
+        # Resumes sound effects exactly where they were
+        pygame.mixer.unpause()
+
+    def pause_music(self):
+        pygame.mixer.music.pause()
+
+    def unpause_music(self):
+        pygame.mixer.music.unpause()
+
+    def get_music_pos(self):
+        # Returns current position in seconds (for resuming later)
+        return pygame.mixer.music.get_pos() / 1000.0
 
     def pause_all(self):
         pygame.mixer.music.pause()

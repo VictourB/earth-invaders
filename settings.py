@@ -31,6 +31,8 @@ SPACE_COLOR = (24, 20, 37)
 
 DANGER_COLOR = (255, 0, 0) # Red
 
+
+
 # --- Asset Paths ---
 BASE_PATH = os.path.abspath(os.path.dirname(__file__))
 
@@ -42,3 +44,8 @@ ENEMY_POINTS_UFO = 200 # Baseline or random
 def get_path(filename):
     """Helper to join paths relative to this file."""
     return os.path.join(BASE_PATH, filename)
+
+# settings.py
+FONT_MAIN = get_path("assets/font/PressStart2P-Regular.ttf")
+FONT_SIZE_HUD = 24
+FONT_SIZE_TITLE = 64

@@ -6,6 +6,7 @@ from settings import *
 from entities import Player, Bullet, Enemy, ShooterEnemy, Particle, UFO
 from fx import PostProcessor
 from audio import AudioManager
+from locale_manager import LocaleManager
 
 class GameManager:
     def __init__(self):
@@ -15,6 +16,7 @@ class GameManager:
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption(TITLE)
         self.clock = pygame.time.Clock()
+        self.locale = LocaleManager()
         self.running = True
 
         self.fx = PostProcessor()
@@ -27,7 +29,7 @@ class GameManager:
             "enemy_shooter": pygame.image.load(get_path("assets/invadership_shooter.png")).convert_alpha(),
             "bullet": pygame.image.load(get_path("assets/spaceMissile.png",)).convert_alpha(),
             "ufo": pygame.image.load(get_path("assets/ufo.png")).convert_alpha(),
-            "bg": pygame.image.load(get_path("assets/earth_background_transparent.png")).convert_alpha()
+            "bg": pygame.image.load(get_path("assets/earth_bg_1_transparent.png")).convert_alpha()
         }
 
         # ---- Music and Audio ----
@@ -35,8 +37,8 @@ class GameManager:
         self.audio.play_music("menu")
 
         # ---- Font ----
-        self.font = pygame.font.Font("assets/font/PressStart2P-Regular.ttf", 32)
-        self.over_font = pygame.font.Font("assets/font/PressStart2P-Regular.ttf", 45)
+        self.font = pygame.font.Font(FONT_MAIN, FONT_SIZE_HUD)
+        self.over_font = pygame.font.Font(FONT_MAIN, FONT_SIZE_TITLE)
 
         # ---- Load Score ----
         self.high_score_file = get_path("highscore.txt")
@@ -48,6 +50,8 @@ class GameManager:
         self.hud_bullet = pygame.transform.scale_by(self.assets["bullet"], 0.75)
         self.hud_bullet_gray = self.hud_bullet.copy()
         self.hud_bullet_gray.fill((100, 100, 100), special_flags=pygame.BLEND_RGB_MULT)
+
+        self.music_paused_pos = 0.0
 
         # ---- Parallax Setup ----
         self.star_layers = []
@@ -68,12 +72,65 @@ class GameManager:
 
         # ---- State Machine
         self.state = "MENU" # MENU, PLAYING, PAUSED, GAME_OVER
-        self.menu_options = ["DEFEND EARTH", "QUIT"]
+        self.menu_options = [self.locale.get("start"), self.locale.get("quit")]
         self.menu_index = 0
 
 
 
         self.reset_game_state_vars()
+
+
+    def change_state(self, new_state):
+        if self.state == new_state:
+            return
+
+        # --- EXIT LOGIC (Things that happen when LEAVING a state) ---
+        if self.state == "PLAYING":
+            #self.audio.stop_sfx("ufo")  # Kill UFO sound immediately on exit
+            pass
+
+        if self.state == "PAUSED":
+            self.music_paused_pos = self.audio.get_music_pos()
+
+        # --- UPDATE THE STATE --
+        previous_state = self.state
+        self.state = new_state
+        print(f"DEBUG: State changed to {self.state}")  # Helpful for development
+
+        # --- ENTRY LOGIC (Things that happen ONCE when entering a state) ---
+        if self.state == "MENU":
+            self.audio.play_music("menu")
+            # Reset groups if you want a clean menu background
+            self.enemies.empty()
+            self.bullets.empty()
+            self.ufo_group.empty()
+
+        elif self.state == "PLAYING":
+            if previous_state == "PAUSED":
+                self.audio.unpause_sfx()
+
+                # 2. Resume Battle Music (from saved spot)
+                # Note: We use the 'start' parameter to jump back to where we were
+                self.audio.play_music("playing", fade_ms=500, start=self.music_playing_pos)
+            else:
+                # This is a fresh start (from Menu or Game Over)
+                self.audio.play_music("playing", fade_ms=1000)
+                #self.reset_game()  # Only reset score/enemies if NOT resuming!
+                self.start_new_game()  # Helper to spawn initial enemies and reset player
+
+        elif self.state == "PAUSED":
+            # 1. Save current battle music position
+            self.music_playing_pos = self.audio.get_music_pos()
+
+            # 2. Freeze the UFO/Explosions
+            self.audio.pause_sfx()
+
+            # 3. Play the Pause Music (Reuse menu track or a specific 'elevator' track)
+            self.audio.play_music("menu", fade_ms=500, start=self.music_paused_pos)
+
+        elif self.state == "GAME_OVER":
+            self.audio.play_music("game_over", loops=0)
+            self.fx.trigger_shake(20, 0.4)
 
     def reset_game_state_vars(self):
         """Resets variables, but does not necessarily start the game logic immediately."""
@@ -82,7 +139,7 @@ class GameManager:
         self.speed_multiplier = 1.0
 
         self.max_bullet_stock = 3
-        self.current_bullet_stock = 3
+        self.current_bullet_stock = self.max_bullet_stock
         self.bullet_recharge_time = 1.0  # Seconds per bullet
         self.recharge_timer = 0.0
 
@@ -106,7 +163,7 @@ class GameManager:
 
     def start_new_game(self):
         """Called when selecting Start from menu or Restarting."""
-        self.state = "PLAYING"
+        self.change_state("PLAYING")
         self.reset_game_state_vars()
         self.load_high_score()
 
@@ -131,7 +188,9 @@ class GameManager:
 
     def spawn_enemies(self):
         self.enemies.empty()
+        self.bullets.empty()
         self.enemy_bullets.empty()
+        self.ufo_group.empty()
         self.update_difficulty()
 
         for _ in range(5 + self.level):
@@ -143,12 +202,30 @@ class GameManager:
             else:
                 self.enemies.add(Enemy(self.assets["enemy"], x, y))
 
+    def render_scaled_text(self, text_string, font_name, max_width, color):
+        """Returns a surface that is guaranteed to fit within max_width."""
+        current_size = FONT_SIZE_TITLE  # Start with your default big size
+        temp_font = pygame.font.Font(font_name, current_size)
+        text_surface = temp_font.render(text_string, True, color)
+
+        # Shrink loop: Reduce font size until it fits the safe zone
+        while text_surface.get_width() > max_width and current_size > 20:
+            current_size -= 2
+            temp_font = pygame.font.Font(font_name, current_size)
+            text_surface = temp_font.render(text_string, True, color)
+
+        return text_surface
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
 
             if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_l:
+                    self.locale.toggle_language()
+                    self.menu_options = [self.locale.get("start"), self.locale.get("quit")]
+                    print(f"Language changed to: {self.locale.current_lang}")
                 # ---- Menu
                 if self.state == "MENU":
                     if event.key == pygame.K_UP:
@@ -165,7 +242,7 @@ class GameManager:
                 elif self.state == "PLAYING":
 
                     if event.key == pygame.K_ESCAPE: # or pygame.K_p:
-                        self.state = "PAUSED"
+                        self.change_state("PAUSED")
                     if event.key == pygame.K_EQUALS:
                         self.level += 1
                         self.spawn_enemies()
@@ -182,16 +259,16 @@ class GameManager:
                 elif self.state == "PAUSED":
 
                     if event.key == pygame.K_ESCAPE: # or event.key == pygame.K_p:
-                        self.state = "PLAYING"
+                        self.change_state("PLAYING")
                     elif event.key == pygame.K_q:
-                        self.state = "MENU"
+                        self.change_state("MENU")
 
                 # ---- GAME OVER
                 elif self.state == 'GAME_OVER':
                     if event.key == pygame.K_r:
                         self.start_new_game()
                     elif event.key == pygame.K_ESCAPE:
-                        self.state = "MENU"
+                        self.change_state("MENU")
 
         return True
 
@@ -234,7 +311,7 @@ class GameManager:
         # After a delay, switch to game over music
         self.create_explosion(self.player.rect.centerx, self.player.rect.centery, RED, count=50)
         self.trigger_shake(50, 2.0)  # Big shake
-        self.state = "GAME_OVER"
+        self.change_state("GAME_OVER")
         self.save_high_score()
 
     def draw_bullet_hud(self):
@@ -305,8 +382,19 @@ class GameManager:
         self.main_surface.blit(overlay, (0, 0))
 
         # Title
-        title_surf = self.over_font.render(TITLE, True, CYAN)
-        title_rect = title_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT * 0.3))
+        safe_width = SCREEN_WIDTH * 0.9
+        title_str = self.locale.get("title")
+
+        # Use our new helper
+        title_surf = self.render_scaled_text(
+            title_str,
+            FONT_MAIN,
+            safe_width,
+            CYAN
+        )
+
+        #title_surf = self.over_font.render(TITLE, True, CYAN)
+        title_rect = title_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 3))
         self.main_surface.blit(title_surf, title_rect)
 
         # Options
@@ -329,7 +417,7 @@ class GameManager:
                         (SCREEN_WIDTH / 2 + 100, SCREEN_HEIGHT * 0.75), 2)
 
         # Draw the score
-        hi_score_surf = self.font.render(f"BEST: {self.high_score}", True, GOLD)
+        hi_score_surf = self.font.render(f"{self.locale.get('high_score')}{self.high_score}", True, GOLD)
         hi_score_rect = hi_score_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT * 0.82))
         self.main_surface.blit(hi_score_surf, hi_score_rect)
 
@@ -340,18 +428,18 @@ class GameManager:
         overlay.fill((0, 0, 0))
         self.main_surface.blit(overlay, (0, 0))
 
-        txt_surf = self.over_font.render("PAUSED", True, WHITE)
+        txt_surf = self.over_font.render(self.locale.get("paused"), True, WHITE)
         txt_rect = txt_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2))
         self.main_surface.blit(txt_surf, txt_rect)
 
-        sub_surf = self.font.render("Press Q to Quit to Main Menu", True, GRAY_HUD)
+        sub_surf = self.font.render(self.locale.get("return_to_main"), True, GRAY_HUD)
         sub_rect = sub_surf.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 60))
         self.main_surface.blit(sub_surf, sub_rect)
 
     def draw_ui_to_main(self):
-        score_txt = self.font.render(f"Score : {self.score}", True, WHITE)
-        level_txt = self.font.render(f"Level : {self.level}", True, WHITE)
-        hi_txt = self.font.render(f"Best  : {self.high_score}", True, GOLD)
+        score_txt = self.font.render(f"{self.locale.get('score')}{self.score}", True, WHITE)
+        level_txt = self.font.render(f"{self.locale.get('level')}{self.level}", True, WHITE)
+        hi_txt = self.font.render(f"{self.locale.get('high_score')}{self.high_score}", True, GOLD)
 
         self.main_surface.blit(score_txt, (10, 10))
         self.main_surface.blit(level_txt, (10, 50))
@@ -390,8 +478,8 @@ class GameManager:
 
         # 3. Text Alert
         if proximity_warning:
-            msg = "CAUTION: BREACH IMMINENT" if any(
-                e.rect.bottom > COLLISION_DISTANCE - 50 for e in self.enemies) else "!!! ENEMY PROXIMITY !!!"
+            msg = self.locale.get('proximity_alert') if any(
+                e.rect.bottom > COLLISION_DISTANCE - 50 for e in self.enemies) else self.locale.get('proximity_warning')
             warn_txt = self.font.render(msg, True, (255, flicker, flicker))
             self.main_surface.blit(warn_txt, (SCREEN_WIDTH // 2 - warn_txt.get_width() // 2, SCREEN_HEIGHT - 34))
 
@@ -435,12 +523,12 @@ class GameManager:
             overlay.fill((0, 0, 0))
             self.main_surface.blit(overlay, (0, 0))
 
-            msg_surface = self.over_font.render("EARTH HAS FALLEN", True, (200, 200, 200))
+            msg_surface = self.over_font.render(self.locale.get("game_over"), True, (200, 200, 200))
             text_rect = msg_surface.get_rect()
             text_rect.center = (int(SCREEN_WIDTH / 2), int(SCREEN_HEIGHT / 2))
             self.main_surface.blit(msg_surface, text_rect)
 
-            restart_surface = self.font.render("Press R to Retry", True, (200, 200, 200))
+            restart_surface = self.font.render(self.locale.get("restart"), True, (200, 200, 200))
             restart_rect = restart_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 50))
             self.main_surface.blit(restart_surface, restart_rect)
 
@@ -463,78 +551,82 @@ class GameManager:
         self.screen.blit(fps_txt, (SCREEN_WIDTH - 250, 10)) # FPS Counter
         pygame.display.flip()
 
+    def update_menu(self, dt):
+        # You could add background rotation or floaty enemies here
+        pass
+
+    def update_playing(self, dt, keys):
+        # Logic when Game is Active
+        if self.freeze_timer > 0:
+            self.freeze_timer -= dt
+            if self.freeze_timer <= 0 and any(e.rect.y > COLLISION_DISTANCE for e in self.enemies):
+                self.state = "GAME_OVER"
+        else:
+            self.player.update(dt, keys)
+            self.bullets.update(dt)
+            self.enemy_bullets.update(dt)
+
+            for enemy in self.enemies:
+                if hasattr(enemy, "fire"):
+                    enemy.update(self.speed_multiplier, dt, self.enemy_bullets)
+                else:
+                    enemy.update(self.speed_multiplier, dt)
+
+            self.check_collisions()
+
+            if self.current_bullet_stock < self.max_bullet_stock:
+                self.recharge_timer += dt
+                if self.recharge_timer >= self.bullet_recharge_time:
+                    self.current_bullet_stock += 1
+                    self.recharge_timer = 0.0
+
+        self.particles.update(dt)
+
+        # ENGINE EXHAUST LOGIC
+        # Spawn small blue/white particles at the back of the player
+        if random.random() > 0.5:  # Don't spawn every frame to save performance
+            exhaust_x = self.player.rect.centerx + random.randint(-5, 5)
+            exhaust_y = self.player.rect.bottom - 10
+            # Give exhaust a downward velocity
+            self.particles.add(Particle(
+                exhaust_x, exhaust_y, CYAN,
+                velocity=(random.uniform(-20, 20), random.uniform(100, 200)),
+                lifetime=0.3, size=3
+            ))
+
+        # ---- Spawn UFO
+        if not self.ufo_group:  # Only spawn if one isn't already there
+            self.ufo_spawn_timer -= dt
+            if self.ufo_spawn_timer <= 0:
+                self.audio.play_sfx("ufo", loops=-1)
+                side = random.choice(["left", "right"])
+                self.ufo_group.add(UFO(self.assets["ufo"], side))
+                self.ufo_spawn_timer = random.uniform(15.0, 30.0)
+        else:
+            self.ufo_group.update(dt)
+            if not self.ufo_group:
+                self.audio.stop_sfx("ufo")
+
+    def update_game_over(self, dt):
+        # self.audio.play_music("game_over")
+        pass
+
+
     def update(self, dt, keys):
         # Always update FX (so shake decays even if game over, or static flickers in menu)
         # Assuming you might want menu background animation later.
         self.update_background(dt)
 
+        # 2. State-specific logic
         if self.state == "PLAYING":
-            # Logic when Game is Active
-            self.audio.play_music("playing")
-            if self.freeze_timer > 0:
-                self.freeze_timer -= dt
-                if self.freeze_timer <= 0 and any(e.rect.y > COLLISION_DISTANCE for e in self.enemies):
-                    self.state = "GAME_OVER"
-            else:
-                self.player.update(dt, keys)
-                self.bullets.update(dt)
-                self.enemy_bullets.update(dt)
-
-                for enemy in self.enemies:
-                    if hasattr(enemy, "fire"):
-                        enemy.update(self.speed_multiplier, dt, self.enemy_bullets)
-                    else:
-                        enemy.update(self.speed_multiplier, dt)
-
-                self.check_collisions()
-
-                if self.current_bullet_stock < self.max_bullet_stock:
-                    self.recharge_timer += dt
-                    if self.recharge_timer >= self.bullet_recharge_time:
-                        self.current_bullet_stock += 1
-                        self.recharge_timer = 0.0
-
-            self.particles.update(dt)
-
-            # ENGINE EXHAUST LOGIC
-            # Spawn small blue/white particles at the back of the player
-            if random.random() > 0.5:  # Don't spawn every frame to save performance
-                exhaust_x = self.player.rect.centerx + random.randint(-5, 5)
-                exhaust_y = self.player.rect.bottom - 10
-                # Give exhaust a downward velocity
-                self.particles.add(Particle(
-                    exhaust_x, exhaust_y, CYAN,
-                    velocity=(random.uniform(-20, 20), random.uniform(100, 200)),
-                    lifetime=0.3, size=3
-                ))
-
-            # ---- Spawn UFO
-            if not self.ufo_group:  # Only spawn if one isn't already there
-                self.ufo_spawn_timer -= dt
-                if self.ufo_spawn_timer <= 0:
-                    self.audio.play_sfx("ufo", loops=-1)
-                    side = random.choice(["left", "right"])
-                    self.ufo_group.add(UFO(self.assets["ufo"], side))
-                    self.ufo_spawn_timer = random.uniform(15.0, 30.0)
-            else:
-                self.ufo_group.update(dt)
-                if not self.ufo_group:
-                    self.audio.stop_sfx("ufo")
-
-
+            self.update_playing(dt, keys)
         elif self.state == "MENU":
-            # You could add background rotation or floaty enemies here
-            self.audio.play_music("menu")
-            pass
-
+            self.update_menu(dt)
         elif self.state == "PAUSED":
-            # Game logic is frozen
             self.audio.play_music("menu")
-            pass
-
+            pass  # Everything is frozen
         elif self.state == "GAME_OVER":
-            self.audio.play_music("game_over")
-            pass
+            self.update_game_over(dt)
 
     def run(self):
         while self.running:
